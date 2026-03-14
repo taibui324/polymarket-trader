@@ -1,5 +1,6 @@
 """Notification service for alerts."""
 
+import threading
 from typing import Any, Optional
 import json
 from src.models.alert import Alert, AlertType, AlertSeverity
@@ -33,6 +34,11 @@ class Notifier:
 
         # Store in database
         db_alert = self._supabase.insert_alert(alert_data)
+
+        # Validate response
+        if not db_alert or "id" not in db_alert:
+            logger.error("Failed to insert alert: missing id in response", alert_type=alert_type.value)
+            raise RuntimeError("Failed to insert alert: missing id in response")
 
         # Print to console
         self._print_alert(alert_type, severity, message, data)
@@ -106,7 +112,14 @@ class Notifier:
         change_pct: float,
     ) -> Alert:
         """Send price movement alert."""
-        direction = "UP" if new_price > old_price else "DOWN"
+        # Handle equal prices correctly
+        if new_price > old_price:
+            direction = "UP"
+        elif new_price < old_price:
+            direction = "DOWN"
+        else:
+            direction = "UNCHANGED"
+
         message = (
             f"Price {direction}: {question[:50]}... "
             f"${old_price:.2f} → ${new_price:.2f} ({change_pct*100:+.1f}%)"
@@ -148,13 +161,16 @@ class Notifier:
         )
 
 
-# Global instance
+# Global instance with thread-safe singleton
 _notifier: Optional[Notifier] = None
+_notifier_lock = threading.Lock()
 
 
 def get_notifier() -> Notifier:
-    """Get global notifier instance."""
+    """Get global notifier instance (thread-safe)."""
     global _notifier
     if _notifier is None:
-        _notifier = Notifier()
+        with _notifier_lock:
+            if _notifier is None:
+                _notifier = Notifier()
     return _notifier

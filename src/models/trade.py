@@ -1,6 +1,6 @@
 """Trade data models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -35,7 +35,7 @@ class Trade(BaseModel):
     price: Decimal
     status: TradeStatus = TradeStatus.PENDING
     profit_loss: Optional[Decimal] = None
-    placed_at: datetime = Field(default_factory=datetime.utcnow)
+    placed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     settled_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

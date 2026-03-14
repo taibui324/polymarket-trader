@@ -1,5 +1,6 @@
 """Scanner worker - runs strategy engines on market data."""
 
+import threading
 from typing import Any, Optional
 from uuid import UUID
 from src.services.supabase_client import get_supabase_client
@@ -72,20 +73,29 @@ class Scanner:
         # Fetch recent snapshots
         snapshots_data = self._supabase.fetch_snapshots(db_market_id, limit=100)
 
-        # Convert to model objects
-        snapshots = [
-            MarketSnapshot(
-                id=s.get("id"),
-                market_id=UUID(s.get("market_id", "")),
-                timestamp=s.get("timestamp"),
-                yes_price=s.get("yes_price"),
-                no_price=s.get("no_price"),
-                yes_volume=s.get("yes_volume"),
-                no_volume=s.get("no_volume"),
-                liquidity=s.get("liquidity"),
-            )
-            for s in snapshots_data
-        ]
+        # Convert to model objects with safe UUID parsing
+        snapshots = []
+        for s in snapshots_data:
+            raw_market_id = s.get("market_id")
+            if not raw_market_id:
+                logger.warning("Snapshot missing market_id", snapshot_id=s.get("id"))
+                continue
+            try:
+                snapshots.append(
+                    MarketSnapshot(
+                        id=s.get("id"),
+                        market_id=UUID(raw_market_id),
+                        timestamp=s.get("timestamp"),
+                        yes_price=s.get("yes_price"),
+                        no_price=s.get("no_price"),
+                        yes_volume=s.get("yes_volume"),
+                        no_volume=s.get("no_volume"),
+                        liquidity=s.get("liquidity"),
+                    )
+                )
+            except ValueError as e:
+                logger.warning("Invalid market_id format", snapshot_id=s.get("id"), error=str(e))
+                continue
 
         if not snapshots:
             logger.debug("No snapshots for market", market_id=market_id)
@@ -152,13 +162,16 @@ class Scanner:
         return total_alerts
 
 
-# Global instance
+# Global instance with thread-safe singleton
 _scanner: Optional[Scanner] = None
+_scanner_lock = threading.Lock()
 
 
 def get_scanner() -> Scanner:
-    """Get global scanner instance."""
+    """Get global scanner instance (thread-safe)."""
     global _scanner
     if _scanner is None:
-        _scanner = Scanner()
+        with _scanner_lock:
+            if _scanner is None:
+                _scanner = Scanner()
     return _scanner
