@@ -1,6 +1,6 @@
 """Data fetcher worker - polls and stores market data."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
@@ -22,6 +22,7 @@ class DataFetcher:
         self._polymarket = get_polymarket_api()
         self._supabase = get_supabase_client()
         self._poll_interval = settings.poll_interval_seconds
+        self._cached_markets: Optional[list[dict[str, Any]]] = None
 
     def fetch_and_store_markets(self) -> int:
         """Fetch active markets and store in database.
@@ -37,10 +38,16 @@ class DataFetcher:
             logger.error("Failed to fetch markets", error=str(e))
             return 0
 
+        # Fetch existing markets once for the entire batch
+        existing = self._supabase.fetch_markets()
+        existing_ids = {m.get("polymarket_id") for m in existing}
+        # Create a lookup dict for market ID by polymarket_id
+        existing_markets = {m.get("polymarket_id"): m for m in existing}
+
         processed = 0
         for market_data in markets_data:
             try:
-                self._process_market(market_data)
+                self._process_market(market_data, existing_ids, existing_markets)
                 processed += 1
             except Exception as e:
                 logger.error(
@@ -49,10 +56,18 @@ class DataFetcher:
                     error=str(e),
                 )
 
+        # Invalidate cache after batch
+        self._cached_markets = None
+
         logger.info("Markets processed", count=processed)
         return processed
 
-    def _process_market(self, data: dict[str, Any]) -> None:
+    def _process_market(
+        self,
+        data: dict[str, Any],
+        existing_ids: set[str],
+        existing_markets: dict[str, dict[str, Any]],
+    ) -> None:
         """Process a single market from API response."""
         condition_id = data.get("conditionId") or data.get("id")
         question = data.get("question", "")
@@ -60,19 +75,23 @@ class DataFetcher:
         if not condition_id or not question:
             return
 
-        # Check if market exists
-        existing = self._supabase.fetch_markets()
-        existing_ids = {m.get("polymarket_id") for m in existing}
-
         if condition_id in existing_ids:
             # Update existing market
             self._update_market(condition_id, data)
+            market = existing_markets.get(condition_id)
         else:
             # Insert new market
             self._insert_market(condition_id, data)
+            # Refresh cache to get the new market ID
+            market = None  # Will fetch below if needed
 
         # Fetch and store snapshot
-        self._store_snapshot(condition_id, data)
+        if market is None:
+            # Need to fetch the market we just inserted
+            all_markets = self._supabase.fetch_markets()
+            market = next((m for m in all_markets if m.get("polymarket_id") == condition_id), None)
+
+        self._store_snapshot(condition_id, data, market)
 
     def _insert_market(self, condition_id: str, data: dict[str, Any]) -> None:
         """Insert new market into database."""
@@ -93,16 +112,30 @@ class DataFetcher:
         update_data: dict[str, Any] = {}
 
         if data.get("closed"):
-            update_data["closed_at"] = datetime.utcnow()
+            # Prefer API timestamp if available
+            closed_at = data.get("closedAt") or datetime.now(timezone.utc)
+            if isinstance(closed_at, str):
+                update_data["closed_at"] = closed_at
+            else:
+                update_data["closed_at"] = closed_at.isoformat()
 
         if data.get("resolved"):
-            update_data["resolved_at"] = datetime.utcnow()
+            resolved_at = data.get("resolvedAt") or datetime.now(timezone.utc)
+            if isinstance(resolved_at, str):
+                update_data["resolved_at"] = resolved_at
+            else:
+                update_data["resolved_at"] = resolved_at.isoformat()
             update_data["result"] = data.get("outcome")
 
         if update_data:
             self._supabase.update_market(condition_id, update_data)
 
-    def _store_snapshot(self, condition_id: str, data: dict[str, Any]) -> None:
+    def _store_snapshot(
+        self,
+        condition_id: str,
+        data: dict[str, Any],
+        market: Optional[dict[str, Any]],
+    ) -> None:
         """Store price snapshot for a market."""
         # Get prices from API response
         yes_price = self._parse_decimal(data.get("yesPrice", 0.5))
@@ -111,21 +144,21 @@ class DataFetcher:
         if yes_price is None or no_price is None:
             return
 
-        # Get market ID from database
-        markets = self._supabase.fetch_markets()
-        market = next((m for m in markets if m.get("polymarket_id") == condition_id), None)
-
         if not market:
             logger.warning("Market not found for snapshot", market_id=condition_id)
             return
 
+        # Use actual volume fields if available, otherwise use total
+        yes_volume = data.get("yesVolume") or data.get("volumeNum", 0)
+        no_volume = data.get("noVolume") or data.get("volumeNum", 0)
+
         snapshot_data = {
             "market_id": market.get("id"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "yes_price": str(yes_price),
             "no_price": str(no_price),
-            "yes_volume": str(data.get("volumeNum", 0)),
-            "no_volume": str(data.get("volumeNum", 0) * (1 - float(yes_price))),
+            "yes_volume": str(yes_volume),
+            "no_volume": str(no_volume),
             "liquidity": str(data.get("liquidity", 0)),
         }
 

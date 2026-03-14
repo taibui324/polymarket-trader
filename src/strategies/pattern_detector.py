@@ -235,11 +235,16 @@ class PatternDetector(BaseStrategy):
         if len(snapshots) < 10:
             return []
 
-        # Find recent high and low
-        prices = [float(s.yes_price) for s in snapshots[:10]]
+        # Exclude current price from historical calculation
+        # snapshots[0] is current, snapshots[1:] are historical
+        historical_prices = [float(s.yes_price) for s in snapshots[1:10]]
 
-        recent_high = max(prices)
-        recent_low = min(prices)
+        if not historical_prices:
+            return []
+
+        # Find recent high and low from historical data only
+        recent_high = max(historical_prices)
+        recent_low = min(historical_prices)
         current = float(snapshots[0].yes_price)
 
         # Breakout above resistance

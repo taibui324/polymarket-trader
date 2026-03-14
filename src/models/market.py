@@ -1,10 +1,15 @@
 """Market data models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
+
+
+def _utc_now() -> datetime:
+    """Return current UTC time as timezone-aware datetime."""
+    return datetime.now(timezone.utc)
 
 
 class Market(BaseModel):
@@ -16,7 +21,7 @@ class Market(BaseModel):
     description: Optional[str] = None
     outcome_yes: str = "Yes"
     outcome_no: str = "No"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utc_now)
     closed_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
     result: Optional[str] = None  # 'yes', 'no', 'unresolved'
@@ -29,7 +34,7 @@ class MarketSnapshot(BaseModel):
 
     id: Optional[UUID] = None
     market_id: UUID
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
     yes_price: Decimal
     no_price: Decimal
     yes_volume: Optional[Decimal] = None
@@ -48,7 +53,7 @@ class MarketWithPrices(BaseModel):
     yes_volume: Optional[Decimal] = None
     no_volume: Optional[Decimal] = None
     liquidity: Optional[Decimal] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
 
     @property
     def total_price(self) -> Decimal:
