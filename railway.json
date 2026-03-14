@@ -1,0 +1,25 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "env": {
+    "required": [
+      "SUPABASE_URL",
+      "SUPABASE_KEY"
+    ],
+    "optional": {
+      "POLYMARKET_API_KEY": "",
+      "ALERT_THRESHOLD_ARB": "0.02",
+      "ALERT_THRESHOLD_PRICE_MOVE": "0.10",
+      "POLL_INTERVAL_SECONDS": "30",
+      "LOG_LEVEL": "INFO"
+    }
+  }
+}
